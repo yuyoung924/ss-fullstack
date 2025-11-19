@@ -156,3 +156,30 @@ app.get("/api/stay-score", async (req, res) => {
 app.listen(process.env.PORT, () =>
   console.log(`🚀 Stay Score backend running on ${process.env.PORT}`)
 );
+
+// --- 시카고 데이터---
+app.get("/api/chicago-heatmap", async (req, res) => {
+  try {
+    const limit = req.query.limit || 500; // 테스트용 500개만 가져오기
+
+    const url =
+      `https://data.cityofchicago.org/resource/ijzp-q8t2.json?$limit=${limit}`;
+
+    const response = await fetch(url);
+    const crimes = await response.json();
+
+    // 히트맵 포맷 변환
+    const heatmapData = crimes
+      .filter(c => c.latitude && c.longitude)
+      .map(c => ({
+        lat: parseFloat(c.latitude),
+        lng: parseFloat(c.longitude),
+        weight: 1
+      }));
+
+    res.json({ count: heatmapData.length, data: heatmapData });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Chicago data fetch error" });
+  }
+});

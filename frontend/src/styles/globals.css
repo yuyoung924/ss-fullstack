@@ -129,4 +129,12 @@
   input {
     font-weight: var(--font-weight-normal);
   }
+
+
 }
+  /* ===== Google Maps Default UI 보호 ===== */
+.map-container * {
+  border: none !important;
+  outline: none !important;
+}
+
