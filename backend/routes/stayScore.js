@@ -1,139 +1,385 @@
 // backend/routes/stayScore.js
 const express = require("express");
 const axios = require("axios");
-
 const router = express.Router();
 
-// 🔧 Google API 기본 URL
 const GOOGLE_BASE = "https://maps.googleapis.com/maps/api";
+const PLACES_BASE = "https://places.googleapis.com/v1";
+const API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
-// =========================
-// 1) 주소 → 위도/경도 변환
-// =========================
+/* -------------------------------------------------------
+ * 기존 Google Maps WebService 공통 요청
+ * -----------------------------------------------------*/
+async function callGoogleJson(url, params) {
+  const res = await axios.get(url, {
+    params: { key: API_KEY, ...params },
+  });
+
+  const data = res.data;
+  if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+    console.error("Google API error:", data);
+    throw new Error(`Google API error: ${data.status}`);
+  }
+  return data;
+}
+
+/* -------------------------------------------------------
+ * New Places API v1 - Nearby Search (max 20)
+ * -----------------------------------------------------*/
+async function searchNearbyPlaces(lat, lng, includedTypes, radiusMeters) {
+  try {
+    const body = {
+      includedTypes,
+      maxResultCount: 20, // Google 제한
+      locationRestriction: {
+        circle: {
+          center: { latitude: lat, longitude: lng },
+          radius: radiusMeters,
+        },
+      },
+    };
+
+    const res = await axios.post(
+      `${PLACES_BASE}/places:searchNearby`,
+      body,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": API_KEY,
+          "X-Goog-FieldMask":
+            "places.displayName,places.location,places.types",
+        },
+      }
+    );
+
+    return res.data.places || [];
+  } catch (err) {
+    console.error("NearbySearch error:", err.response?.data || err.message);
+    return [];
+  }
+}
+
+/* -------------------------------------------------------
+ * New Places API v1 - Text Search (보조)
+ * -----------------------------------------------------*/
+async function searchPlacesText(lat, lng, query, radiusMeters) {
+  try {
+    const body = {
+      textQuery: query,
+      maxResultCount: 20,
+      locationBias: {
+        circle: {
+          center: { latitude: lat, longitude: lng },
+          radius: radiusMeters,
+        },
+      },
+    };
+
+    const res = await axios.post(
+      `${PLACES_BASE}/places:searchText`,
+      body,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": API_KEY,
+          "X-Goog-FieldMask": "*",
+        },
+      }
+    );
+
+    return res.data.places || [];
+  } catch (err) {
+    console.error("TextSearch error:", err.response?.data || err.message);
+    return [];
+  }
+}
+
+/* -------------------------------------------------------
+ * 1) Geocoding
+ * -----------------------------------------------------*/
 async function geocodeAddress(address) {
-  const url = `${GOOGLE_BASE}/geocode/json?address=${encodeURIComponent(
-    address
-  )}&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+  const data = await callGoogleJson(`${GOOGLE_BASE}/geocode/json`, {
+    address,
+  });
 
-  const res = await axios.get(url);
-  if (!res.data.results || res.data.results.length === 0) return null;
+  if (!data.results || !data.results.length) return null;
 
-  const loc = res.data.results[0].geometry.location;
+  const loc = data.results[0].geometry.location;
 
   return {
-    address: res.data.results[0].formatted_address,
+    address: data.results[0].formatted_address,
     lat: loc.lat,
     lng: loc.lng,
   };
 }
 
-// =======================
-// 2) 도심 접근성 (예: 서울 시청)
-// =======================
-const CITY_CENTERS = {
-  seoul: { name: "서울 시청", lat: 37.5665, lng: 126.9780 },
-  busan: { name: "서면 중심부", lat: 35.1577, lng: 129.0592 },
+/* -------------------------------------------------------
+ * 거리 계산
+ * -----------------------------------------------------*/
+function distanceMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) ** 2;
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+/* -------------------------------------------------------
+ * 경찰서 전용 검색
+ *   - Google v1 공식 타입: "police"
+ * -----------------------------------------------------*/
+async function searchPoliceStations(lat, lng, radius) {
+  let places = await searchNearbyPlaces(lat, lng, ["police"], radius);
+
+  // 주변 지구대/파출소가 placeType에 없을 경우 검색 보조
+  if (places.length < 1) {
+    const extra = await searchPlacesText(lat, lng, "경찰서", radius);
+    const extra2 = await searchPlacesText(lat, lng, "파출소", radius);
+    const extra3 = await searchPlacesText(lat, lng, "지구대", radius);
+
+    places = [...places, ...extra, ...extra2, ...extra3];
+  }
+
+  return places;
+}
+
+/* -------------------------------------------------------
+ * 4) 편의성 점수 계산
+ * -----------------------------------------------------*/
+const FACILITY_TYPES = {
+  convenienceStore: {
+    placeType: "convenience_store",
+    label: "편의점",
+    cap: 20,
+    weight: 0.35,
+  },
+  pharmacy: {
+    placeType: "pharmacy",
+    label: "약국",
+    cap: 20,
+    weight: 0.20,
+  },
+  hospital: {
+    placeType: "hospital",
+    label: "병원",
+    cap: 20,
+    weight: 0.25,
+  },
+  police: {
+    placeType: "police",
+    label: "경찰서",
+    cap: 20,
+    weight: 0.20,
+  },
 };
 
-async function getAccessScore(lat, lng) {
-  const center = CITY_CENTERS["seoul"]; // MVP: 서울 기준
+async function getConvenienceInfo(lat, lng) {
+  const radius = 1000;
+  const facilities = {};
+  let normalizedSum = 0;
 
-  const url = `${GOOGLE_BASE}/distancematrix/json?origins=${lat},${lng}&destinations=${center.lat},${center.lng}&mode=transit&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+  for (const [key, cfg] of Object.entries(FACILITY_TYPES)) {
+    let places = [];
 
-  const res = await axios.get(url);
-  const element = res.data.rows[0].elements[0];
+    if (key === "police") {
+      places = await searchPoliceStations(lat, lng, radius);
+    } else {
+      places = await searchNearbyPlaces(lat, lng, [cfg.placeType], radius);
+    }
 
-  if (element.status !== "OK") return { score: 50, minutes: null };
+    const count = places.length;
 
-  const minutes = Math.round(element.duration.value / 60);
+    facilities[key] = { label: cfg.label, count };
 
-  let score = 100 - minutes;
-  if (score < 20) score = 20;
-
-  return {
-    score,
-    minutes,
-    centerName: center.name,
-  };
-}
-
-// =======================
-// 3) 편의성 (반경 내 POI 개수)
-// =======================
-async function getConvenienceScore(lat, lng) {
-  const categories = ["convenience_store", "supermarket", "cafe", "pharmacy"];
-
-  let total = 0;
-  let details = {};
-
-  for (let type of categories) {
-    const url = `${GOOGLE_BASE}/place/nearbysearch/json?location=${lat},${lng}&radius=500&type=${type}&key=${process.env.GOOGLE_MAPS_API_KEY}`;
-
-    const res = await axios.get(url);
-    const count = res.data.results.length;
-
-    details[type] = count;
-    total += count;
+    const ratio = Math.min(count / cfg.cap, 1);
+    normalizedSum += ratio * cfg.weight;
   }
 
-  const score = Math.min(100, total * 5);
+  const score = Math.round(60 + normalizedSum * 40);
 
-  return { score, details };
+  const totalCount = Object.values(facilities).reduce(
+    (s, f) => s + f.count,
+    0
+  );
+
+  return { score, totalCount, facilities };
 }
 
-// =======================
-// 4) 대중교통 (가장 가까운 정류장)
-// =======================
-async function getTransitScore(lat, lng) {
-  const url = `${GOOGLE_BASE}/place/nearbysearch/json?location=${lat},${lng}&radius=500&type=bus_station&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+/* -------------------------------------------------------
+ * 지하철역 검색
+ * -----------------------------------------------------*/
+async function getNearestSubway(lat, lng) {
+  const places = await searchNearbyPlaces(
+    lat,
+    lng,
+    ["subway_station"],
+    3000
+  );
 
-  const res = await axios.get(url);
-
-  if (!res.data.results.length) {
-    return { score: 40, nearest: null };
+  if (!places.length) {
+    return {
+      station: {
+        name: "3km 반경 내 지하철역이 없습니다.",
+        distanceMeters: null,
+        walkTimeText: null,
+      },
+      score: 40,
+    };
   }
 
-  const nearest = res.data.results[0];
-  const score = Math.min(100, res.data.results.length * 10);
+  let nearest = null;
+  let minDist = Infinity;
+
+  for (const p of places) {
+    if (!p.location) continue;
+
+    const dist = distanceMeters(
+      lat,
+      lng,
+      p.location.latitude,
+      p.location.longitude
+    );
+
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = p;
+    }
+  }
+
+  const distanceM = Math.round(minDist);
+  const walkMinutes = Math.max(1, Math.round(distanceM / 80));
+
+  const name = nearest.displayName?.text || "지하철역";
 
   return {
-    score,
-    nearest: {
-      name: nearest.name,
-      lat: nearest.geometry.location.lat,
-      lng: nearest.geometry.location.lng,
+    score:
+      distanceM <= 300
+        ? 100
+        : distanceM <= 600
+        ? 90
+        : distanceM <= 900
+        ? 80
+        : distanceM <= 1200
+        ? 70
+        : distanceM <= 1500
+        ? 60
+        : 50,
+    station: {
+      name,
+      lat: nearest.location.latitude,
+      lng: nearest.location.longitude,
+      distanceMeters: distanceM,
+      distanceText: `${distanceM}m`,
+      walkTimeText: `${walkMinutes}분`,
     },
   };
 }
 
-// =======================
-// 🎯 최종: Stay Score API
-// =======================
+/* -------------------------------------------------------
+ * 메인 라우트
+ * -----------------------------------------------------*/
 router.get("/stay-score", async (req, res) => {
   try {
     const { address } = req.query;
+    const latParam = req.query.lat ? parseFloat(req.query.lat) : null;
+    const lngParam = req.query.lng ? parseFloat(req.query.lng) : null;
 
-    if (!address) return res.status(400).json({ error: "address required" });
+    let base;
 
-    const geo = await geocodeAddress(address);
-    if (!geo) return res.status(404).json({ error: "Invalid address" });
+    if (latParam && lngParam) {
+      base = { address: address || null, lat: latParam, lng: lngParam };
+    } else {
+      if (!address)
+        return res
+          .status(400)
+          .json({ error: "address 또는 lat,lng 중 하나가 필요합니다." });
 
-    const access = await getAccessScore(geo.lat, geo.lng);
-    const convenience = await getConvenienceScore(geo.lat, geo.lng);
-    const transit = await getTransitScore(geo.lat, geo.lng);
+      const geo = await geocodeAddress(address);
+      if (!geo) return res.status(404).json({ error: "유효하지 않은 주소입니다." });
 
-    return res.json({
-      query: geo,
+      base = geo;
+    }
+
+    const { lat, lng } = base;
+
+    const [convenience, transit] = await Promise.all([
+      getConvenienceInfo(lat, lng),
+      getNearestSubway(lat, lng),
+    ]);
+
+    res.json({
+      query: base,
       scores: {
-        access,
         convenience,
         transit,
       },
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Server Error" });
+    console.error("stay-score route error:", err);
+    res.status(500).json({ error: "Server Error" });
   }
 });
+
+/* -------------------------------------------------------
+ * 시설 리스트 조회 API
+ * GET /api/nearby?lat=...&lng=...&type=...
+ * 
+ * 프론트: SafetyHeatMap → 바 클릭 후 이 API 호출
+ * -----------------------------------------------------*/
+
+router.get("/nearby", async (req, res) => {
+  try {
+    const lat = parseFloat(req.query.lat);
+    const lng = parseFloat(req.query.lng);
+    const type = req.query.type;
+
+    if (!lat || !lng || !type) {
+      return res.status(400).json({ error: "lat, lng, type 모두 필요합니다." });
+    }
+
+    const url = `https://places.googleapis.com/v1/places:searchNearby`;
+
+    const body = {
+      includedTypes: [type],
+      maxResultCount: 20, // Google Places v1 제한
+      locationRestriction: {
+        circle: {
+          center: { latitude: lat, longitude: lng },
+          radius: 1200, // 1.2km 반경
+        },
+      },
+    };
+
+    const placesRes = await axios.post(url, body, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": API_KEY,
+        "X-Goog-FieldMask":
+          "places.displayName,places.location,places.types",
+      },
+    });
+
+    return res.json({
+      ok: true,
+      places: placesRes.data.places || [],
+    });
+  } catch (err) {
+    console.error("Nearby API error:", err.response?.data || err);
+    return res.status(500).json({
+      error: "Nearby API 서버 오류",
+    });
+  }
+});
+
 
 module.exports = router;

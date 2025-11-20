@@ -13,15 +13,12 @@ import { ComparisonView } from './components/ComparisonView';
 import { Button } from './components/ui/button';
 import { LayoutGrid, List } from 'lucide-react';
 
-// 실제 API 호출 함수 (기존 테스트용 앱에서 쓰던 것)
-import { fetchStayScore } from './api/stayScore';
-
+// 주소 → 도시 판별 함수
 function detectCityByLatLng(lat, lng) {
-  if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return "Chicago";
-  if (lat > 37 && lat < 38 && lng > 126 && lng < 128) return "Seoul";
-  return "Other";
+  if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return 'Chicago';
+  if (lat > 37 && lat < 38 && lng > 126 && lng < 128) return 'Seoul';
+  return 'Other';
 }
-
 
 export default function App() {
   const [savedLocations, setSavedLocations] = useState([]);
@@ -30,94 +27,139 @@ export default function App() {
   const [activeLocationIndex, setActiveLocationIndex] = useState(-1);
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState('single'); // 'single' | 'compare'
+  const [selectedFacilityType, setSelectedFacilityType] = useState(null);
 
+  // -----------------------------
+  // 검색 핸들러
+  // -----------------------------
   const handleSearch = async (location) => {
     setIsLoading(true);
-  
+    // 새로운 장소 검색하면 선택된 시설 타입 초기화
+    setSelectedFacilityType(null);
+
     try {
-      // 1) 기존 stay-score API
-      const apiResult = await fetchStayScore(location);
-  
-      const lat =
-        apiResult?.query?.lat !== undefined
-          ? apiResult.query.lat
-          : 37.5665;
-      const lng =
-        apiResult?.query?.lng !== undefined
-          ? apiResult.query.lng
-          : 126.9780;
-  
-      // 2) ✅ 새 안전 점수 기본값
+      // 1) stay-score API 호출
+      const res = await fetch(
+        `http://localhost:4000/api/stay-score?address=${encodeURIComponent(
+          location
+        )}`
+      );
+
+      if (!res.ok) throw new Error('Stay Score API Error');
+
+      const data = await res.json();
+
+      const lat = data.query.lat;
+      const lng = data.query.lng;
+
+      // ============================
+      // 2) 편의성 (백엔드 결과 그대로 사용)
+      // ============================
+      const convenience = data.scores.convenience;
+
+      const convenienceScore = convenience.score;
+      const nearbyFacilities = [
+        {
+          name: '편의점',
+          count: convenience.facilities.convenienceStore.count,
+        },
+        {
+          name: '약국',
+          count: convenience.facilities.pharmacy.count,
+        },
+        {
+          name: '병원',
+          count: convenience.facilities.hospital.count,
+        },
+        {
+          name: '경찰서',
+          count: convenience.facilities.police.count,
+        },
+      ];
+
+      // ============================
+      // 3) 대중교통 (지하철역)
+      // ============================
+      const transit = data.scores.transit;
+
+      let nearestStation = transit.station
+        ? {
+            name: transit.station.name,
+            distance: transit.station.distanceText,
+            walkTime: transit.station.walkTimeText,
+            lat: transit.station.lat,
+            lng: transit.station.lng,
+          }
+        : null;
+
+      // ============================
+      // 4) 안전 점수 (시카고일 경우만)
+      // ============================
       let safetyScore = 75;
-      let safetyGrade = "B";
-  
+      let safetyGrade = 'B';
       const city = detectCityByLatLng(lat, lng);
-  
-      // 3) 시카고이면 백엔드 안전 점수 API 호출
-      if (city === "Chicago") {
+
+      if (city === 'Chicago') {
         try {
-          const res = await fetch(
+          const safetyRes = await fetch(
             `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
           );
-          if (res.ok) {
-            const data = await res.json();
-            safetyScore = data.score;   // 0~100
-            safetyGrade = data.grade;   // A/B/C/D
-          } else {
-            console.warn("safety/chicago/point not ok:", res.status);
+          if (safetyRes.ok) {
+            const safetyData = await safetyRes.json();
+            safetyScore = safetyData.score;
+            safetyGrade = safetyData.grade;
           }
-        } catch (err) {
-          console.error("safety score API error:", err);
+        } catch (e) {
+          console.log('Chicago safety fetch error:', e);
         }
-      } else {
-        // 4) 나중에 서울/기타 로직도 여기서 분기 가능
-        // 지금은 기본값 유지 (75점 / B등급)
       }
-  
-      // 5) 기존 mockData에서 safetyScore / safetyGrade만 교체
-      const mockData = {
+
+      // ============================
+      // 5) 최종 UI 데이터 묶기
+      // ============================
+      const finalObj = {
         location,
-        safetyScore,
-        safetyGrade,
-        accessibilityScore: Math.floor(Math.random() * 40) + 60,
-        accessibilityTime: ['10분', '15분', '20분', '25분'][
-          Math.floor(Math.random() * 4)
-        ],
-        convenienceScore: Math.floor(Math.random() * 30) + 70,
-        nearbyFacilities: [
-          { name: '편의점', count: Math.floor(Math.random() * 10) + 3 },
-          { name: '약국', count: Math.floor(Math.random() * 5) + 1 },
-          { name: '병원', count: Math.floor(Math.random() * 3) + 1 },
-          { name: '경찰서', count: Math.floor(Math.random() * 2) + 1 },
-        ],
-        nearestStation: {
-          name: `${location.split(' ')[0]}역 2번 출구`,
-          distance: `${Math.floor(Math.random() * 500) + 100}m`,
-          walkTime: `${Math.floor(Math.random() * 10) + 3}분`,
-          interval: '3-5분',
-          nightService: Math.random() > 0.3,
-        },
         lat,
         lng,
+
+        // Safety
+        safetyScore,
+        safetyGrade,
+
+        // Convenience
+        convenienceScore,
+        nearbyFacilities,
+
+        // Transit
+        nearestStation,
+
+        // MVP: 접근성은 일단 제외 (원하면 추가)
+        accessibilityScore: null,
+        accessibilityTime: null,
       };
-  
-      setCurrentSearchResult(mockData);
+
+      setCurrentSearchResult(finalObj);
       setActiveLocationIndex(-1);
       setViewMode('single');
-    } catch (error) {
-      console.error('stayScore API 호출 에러:', error);
-      alert('위치 분석 중 오류가 발생했습니다. 나중에 다시 시도해 주세요.');
+    } catch (err) {
+      console.error(err);
+      alert('위치 분석 중 오류가 발생했습니다.');
     } finally {
       setIsLoading(false);
     }
   };
-  
+
+  // 그래프 막대 눌렀을 때 호출
+  const handleFacilitySelect = (type) => {
+    setSelectedFacilityType(type);
+  };
 
   const handleGoHome = () => {
     setSavedLocations([]);
     setCurrentSearchResult(null);
     setActiveLocationIndex(-1);
     setViewMode('single');
+    setSelectedFacilityType(null);
   };
 
   const handleAddToSidebar = () => {
@@ -136,11 +178,13 @@ export default function App() {
     if (newLocations.length === 0) {
       setViewMode('single');
     }
+    setSelectedFacilityType(null);
   };
 
   const handleTabClick = (index) => {
     setActiveLocationIndex(index);
     setViewMode('single');
+    setSelectedFacilityType(null);
   };
 
   const displayLocation =
@@ -240,6 +284,7 @@ export default function App() {
                       safetyScore={displayLocation.safetyScore}
                       lat={displayLocation.lat}
                       lng={displayLocation.lng}
+                      selectedFacilityType={selectedFacilityType}
                     />
                   </div>
 
@@ -258,6 +303,7 @@ export default function App() {
                     <ConvenienceScore
                       score={displayLocation.convenienceScore}
                       facilities={displayLocation.nearbyFacilities}
+                      onFacilitySelect={handleFacilitySelect}
                     />
                     <TransportInfo station={displayLocation.nearestStation} />
                   </div>
