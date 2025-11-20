@@ -4,7 +4,7 @@ const express = require("express");
 const cors = require("cors");
 
 const stayScoreRouter = require("./routes/stayScore");
-const chicagoSafetyRouter = require("./routes/chicagoSafety"); // 아까 만든 시카고 전용 라우터
+const safetyRouter = require("./routes/safety");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -18,7 +18,7 @@ app.get("/api/health", (req, res) => {
 
 // 공통 prefix = /api
 app.use("/api", stayScoreRouter);      // /api/stay-score
-app.use("/api", chicagoSafetyRouter);  // /api/safety/chicago/...
+app.use("/api", safetyRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);

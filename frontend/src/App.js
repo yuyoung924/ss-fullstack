@@ -16,6 +16,8 @@ import { LayoutGrid, List } from 'lucide-react';
 // 주소 → 도시 판별 함수
 function detectCityByLatLng(lat, lng) {
   if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return 'Chicago';
+  if (lat > 51 && lat < 52 && lng > -0.6 && lng < 0.4) return 'London';
+  if (lat > 43.55 && lat < 43.9 && lng > -79.64 && lng < -79.12) return "Toronto";
   if (lat > 37 && lat < 38 && lng > 126 && lng < 128) return 'Seoul';
   return 'Other';
 }
@@ -51,6 +53,9 @@ export default function App() {
 
       const lat = data.query.lat;
       const lng = data.query.lng;
+
+      // ✅ 1) 위/경도로 도시 판별
+      const city = detectCityByLatLng(lat, lng);
 
       // ============================
       // 2) 편의성 (백엔드 결과 그대로 사용)
@@ -93,16 +98,17 @@ export default function App() {
         : null;
 
       // ============================
-      // 4) 안전 점수 (시카고일 경우만)
+      // 4) 안전 점수
+      //    (지금은 chicago만 실제 API, 나머지는 기본값)
       // ============================
       let safetyScore = 75;
       let safetyGrade = 'B';
-      const city = detectCityByLatLng(lat, lng);
 
-      if (city === 'Chicago') {
+      if (city !== 'Other') {
         try {
+          // ✅ 나중에 seoul, la 추가하면 그대로 확장 가능
           const safetyRes = await fetch(
-            `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
+            `http://localhost:4000/api/safety/${city.toLowerCase()}/point?lat=${lat}&lng=${lng}`
           );
           if (safetyRes.ok) {
             const safetyData = await safetyRes.json();
@@ -110,7 +116,7 @@ export default function App() {
             safetyGrade = safetyData.grade;
           }
         } catch (e) {
-          console.log('Chicago safety fetch error:', e);
+          console.log('Safety fetch error:', e);
         }
       }
 
@@ -121,6 +127,7 @@ export default function App() {
         location,
         lat,
         lng,
+        city,                 // ✅ 도시 정보 저장
 
         // Safety
         safetyScore,
@@ -281,6 +288,7 @@ export default function App() {
                   <div className="mb-6">
                     <SafetyHeatMap
                       location={displayLocation.location}
+                      city={displayLocation.city}          // ✅ 도시 전달
                       safetyScore={displayLocation.safetyScore}
                       lat={displayLocation.lat}
                       lng={displayLocation.lng}
