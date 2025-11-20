@@ -16,6 +16,13 @@ import { LayoutGrid, List } from 'lucide-react';
 // 실제 API 호출 함수 (기존 테스트용 앱에서 쓰던 것)
 import { fetchStayScore } from './api/stayScore';
 
+function detectCityByLatLng(lat, lng) {
+  if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return "Chicago";
+  if (lat > 37 && lat < 38 && lng > 126 && lng < 128) return "Seoul";
+  return "Other";
+}
+
+
 export default function App() {
   const [savedLocations, setSavedLocations] = useState([]);
   const [currentSearchResult, setCurrentSearchResult] = useState(null);
@@ -26,12 +33,11 @@ export default function App() {
 
   const handleSearch = async (location) => {
     setIsLoading(true);
-
+  
     try {
-      // ---- 여기서 실제 API 호출 ----
+      // 1) 기존 stay-score API
       const apiResult = await fetchStayScore(location);
-
-      // lat / lng (API가 실패하면 서울 시청 기본값)
+  
       const lat =
         apiResult?.query?.lat !== undefined
           ? apiResult.query.lat
@@ -40,17 +46,44 @@ export default function App() {
         apiResult?.query?.lng !== undefined
           ? apiResult.query.lng
           : 126.9780;
-
-      // 나머지 점수들은 일단 지금처럼 mock + 랜덤 유지
+  
+      // 2) ✅ 새 안전 점수 기본값
+      let safetyScore = 75;
+      let safetyGrade = "B";
+  
+      const city = detectCityByLatLng(lat, lng);
+  
+      // 3) 시카고이면 백엔드 안전 점수 API 호출
+      if (city === "Chicago") {
+        try {
+          const res = await fetch(
+            `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            safetyScore = data.score;   // 0~100
+            safetyGrade = data.grade;   // A/B/C/D
+          } else {
+            console.warn("safety/chicago/point not ok:", res.status);
+          }
+        } catch (err) {
+          console.error("safety score API error:", err);
+        }
+      } else {
+        // 4) 나중에 서울/기타 로직도 여기서 분기 가능
+        // 지금은 기본값 유지 (75점 / B등급)
+      }
+  
+      // 5) 기존 mockData에서 safetyScore / safetyGrade만 교체
       const mockData = {
         location,
-        safetyScore: Math.floor(Math.random() * 30) + 70, // 70-100
-        safetyGrade: ['A', 'B', 'A', 'B'][Math.floor(Math.random() * 4)],
-        accessibilityScore: Math.floor(Math.random() * 40) + 60, // 60-100
+        safetyScore,
+        safetyGrade,
+        accessibilityScore: Math.floor(Math.random() * 40) + 60,
         accessibilityTime: ['10분', '15분', '20분', '25분'][
           Math.floor(Math.random() * 4)
         ],
-        convenienceScore: Math.floor(Math.random() * 30) + 70, // 70-100
+        convenienceScore: Math.floor(Math.random() * 30) + 70,
         nearbyFacilities: [
           { name: '편의점', count: Math.floor(Math.random() * 10) + 3 },
           { name: '약국', count: Math.floor(Math.random() * 5) + 1 },
@@ -64,13 +97,12 @@ export default function App() {
           interval: '3-5분',
           nightService: Math.random() > 0.3,
         },
-        // ---- 여기 추가: 지도용 좌표 ----
         lat,
         lng,
       };
-
+  
       setCurrentSearchResult(mockData);
-      setActiveLocationIndex(-1); // 검색 결과 뷰로 전환
+      setActiveLocationIndex(-1);
       setViewMode('single');
     } catch (error) {
       console.error('stayScore API 호출 에러:', error);
@@ -79,6 +111,7 @@ export default function App() {
       setIsLoading(false);
     }
   };
+  
 
   const handleGoHome = () => {
     setSavedLocations([]);
