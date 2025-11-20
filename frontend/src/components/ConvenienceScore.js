@@ -53,7 +53,7 @@ export function ConvenienceScore({ score, facilities }) {
       <div className="mb-4">
         <div className="flex items-center gap-2 mb-3 text-gray-700">
           <TrendingUp className="w-4 h-4" />
-          <span>5분 거리 내 시설 현황</span>
+          <span>1km 거리 내 시설 현황</span>
         </div>
         <ResponsiveContainer width="100%" height={180}>
           <BarChart data={chartData}>

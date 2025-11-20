@@ -31,86 +31,127 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState('single'); // 'single' | 'compare'
 
-  const handleSearch = async (location) => {
-    setIsLoading(true);
-  
-    try {
-      // 1) 기존 stay-score API
-      const apiResult = await fetchStayScore(location);
-  
-      const lat =
-        apiResult?.query?.lat !== undefined
-          ? apiResult.query.lat
-          : 37.5665;
-      const lng =
-        apiResult?.query?.lng !== undefined
-          ? apiResult.query.lng
-          : 126.9780;
-  
-      // 2) ✅ 새 안전 점수 기본값
-      let safetyScore = 75;
-      let safetyGrade = "B";
-  
-      const city = detectCityByLatLng(lat, lng);
-  
-      // 3) 시카고이면 백엔드 안전 점수 API 호출
-      if (city === "Chicago") {
-        try {
-          const res = await fetch(
-            `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
-          );
-          if (res.ok) {
-            const data = await res.json();
-            safetyScore = data.score;   // 0~100
-            safetyGrade = data.grade;   // A/B/C/D
-          } else {
-            console.warn("safety/chicago/point not ok:", res.status);
-          }
-        } catch (err) {
-          console.error("safety score API error:", err);
+  // App.js 내부
+const handleSearch = async (location) => {
+  setIsLoading(true);
+
+  try {
+    // 1) stay-score API 호출
+    const res = await fetch(
+      `http://localhost:4000/api/stay-score?address=${encodeURIComponent(
+        location
+      )}`
+    );
+
+    if (!res.ok) throw new Error("Stay Score API Error");
+
+    const data = await res.json();
+
+    const lat = data.query.lat;
+    const lng = data.query.lng;
+
+    // ============================
+    // 2) 백엔드에서 전달한 편의성
+    // ============================
+    const convenience = data.scores.convenience;
+
+    const convenienceScore = convenience.score;
+    const nearbyFacilities = [
+      {
+        name: "편의점",
+        count: convenience.facilities.convenienceStore.count,
+      },
+      {
+        name: "약국",
+        count: convenience.facilities.pharmacy.count,
+      },
+      {
+        name: "병원",
+        count: convenience.facilities.hospital.count,
+      },
+      {
+        name: "경찰서",
+        count: convenience.facilities.police.count,
+      },
+    ];
+
+    // ============================
+    // 3) 대중교통 (지하철역)
+    // ============================
+    const transit = data.scores.transit;
+
+    let nearestStation = transit.station
+      ? {
+          name: transit.station.name,
+          distance: transit.station.distanceText,
+          walkTime: transit.station.walkTimeText,
+          lat: transit.station.lat,
+          lng: transit.station.lng,
         }
-      } else {
-        // 4) 나중에 서울/기타 로직도 여기서 분기 가능
-        // 지금은 기본값 유지 (75점 / B등급)
-      }
-  
-      // 5) 기존 mockData에서 safetyScore / safetyGrade만 교체
-      const mockData = {
-        location,
-        safetyScore,
-        safetyGrade,
-        accessibilityScore: Math.floor(Math.random() * 40) + 60,
-        accessibilityTime: ['10분', '15분', '20분', '25분'][
-          Math.floor(Math.random() * 4)
-        ],
-        convenienceScore: Math.floor(Math.random() * 30) + 70,
-        nearbyFacilities: [
-          { name: '편의점', count: Math.floor(Math.random() * 10) + 3 },
-          { name: '약국', count: Math.floor(Math.random() * 5) + 1 },
-          { name: '병원', count: Math.floor(Math.random() * 3) + 1 },
-          { name: '경찰서', count: Math.floor(Math.random() * 2) + 1 },
-        ],
-        nearestStation: {
-          name: `${location.split(' ')[0]}역 2번 출구`,
-          distance: `${Math.floor(Math.random() * 500) + 100}m`,
-          walkTime: `${Math.floor(Math.random() * 10) + 3}분`,
-          interval: '3-5분',
-          nightService: Math.random() > 0.3,
-        },
-        lat,
-        lng,
-      };
-  
-      setCurrentSearchResult(mockData);
-      setActiveLocationIndex(-1);
-      setViewMode('single');
-    } catch (error) {
-      console.error('stayScore API 호출 에러:', error);
-      alert('위치 분석 중 오류가 발생했습니다. 나중에 다시 시도해 주세요.');
-    } finally {
-      setIsLoading(false);
+      : null;
+
+    // ============================
+    // 4) 안전 점수 (시카고일 경우만)
+    // ============================
+    function detectCityByLatLng(lat, lng) {
+      if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return "Chicago";
+      return "Other";
     }
-  };
+
+    let safetyScore = 75;
+    let safetyGrade = "B";
+    const city = detectCityByLatLng(lat, lng);
+
+    if (city === "Chicago") {
+      try {
+        const safetyRes = await fetch(
+          `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
+        );
+        if (safetyRes.ok) {
+          const safetyData = await safetyRes.json();
+          safetyScore = safetyData.score;
+          safetyGrade = safetyData.grade;
+        }
+      } catch (e) {
+        console.log("Chicago safety fetch error:", e);
+      }
+    }
+
+    // ============================
+    // 5) 최종 UI 데이터 묶기
+    // ============================
+    const finalObj = {
+      location,
+      lat,
+      lng,
+
+      // Safety
+      safetyScore,
+      safetyGrade,
+
+      // Convenience
+      convenienceScore,
+      nearbyFacilities,
+
+      // Transit
+      nearestStation,
+
+      // MVP: 접근성은 일단 제외 (원하면 추가)
+      accessibilityScore: null,
+      accessibilityTime: null,
+    };
+
+    setCurrentSearchResult(finalObj);
+    setActiveLocationIndex(-1);
+    setViewMode("single");
+  } catch (err) {
+    console.error(err);
+    alert("위치 분석 중 오류가 발생했습니다.");
+  } finally {
+    setIsLoading(false);
+  }
+};
+
   
 
   const handleGoHome = () => {
