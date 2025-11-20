@@ -13,15 +13,12 @@ import { ComparisonView } from './components/ComparisonView';
 import { Button } from './components/ui/button';
 import { LayoutGrid, List } from 'lucide-react';
 
-// 실제 API 호출 함수 (기존 테스트용 앱에서 쓰던 것)
-import { fetchStayScore } from './api/stayScore';
-
+// 주소 → 도시 판별 함수
 function detectCityByLatLng(lat, lng) {
-  if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return "Chicago";
-  if (lat > 37 && lat < 38 && lng > 126 && lng < 128) return "Seoul";
-  return "Other";
+  if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return 'Chicago';
+  if (lat > 37 && lat < 38 && lng > 126 && lng < 128) return 'Seoul';
+  return 'Other';
 }
-
 
 export default function App() {
   const [savedLocations, setSavedLocations] = useState([]);
@@ -30,135 +27,139 @@ export default function App() {
   const [activeLocationIndex, setActiveLocationIndex] = useState(-1);
   const [isLoading, setIsLoading] = useState(false);
   const [viewMode, setViewMode] = useState('single'); // 'single' | 'compare'
+  const [selectedFacilityType, setSelectedFacilityType] = useState(null);
 
-  // App.js 내부
-const handleSearch = async (location) => {
-  setIsLoading(true);
+  // -----------------------------
+  // 검색 핸들러
+  // -----------------------------
+  const handleSearch = async (location) => {
+    setIsLoading(true);
+    // 새로운 장소 검색하면 선택된 시설 타입 초기화
+    setSelectedFacilityType(null);
 
-  try {
-    // 1) stay-score API 호출
-    const res = await fetch(
-      `http://localhost:4000/api/stay-score?address=${encodeURIComponent(
-        location
-      )}`
-    );
+    try {
+      // 1) stay-score API 호출
+      const res = await fetch(
+        `http://localhost:4000/api/stay-score?address=${encodeURIComponent(
+          location
+        )}`
+      );
 
-    if (!res.ok) throw new Error("Stay Score API Error");
+      if (!res.ok) throw new Error('Stay Score API Error');
 
-    const data = await res.json();
+      const data = await res.json();
 
-    const lat = data.query.lat;
-    const lng = data.query.lng;
+      const lat = data.query.lat;
+      const lng = data.query.lng;
 
-    // ============================
-    // 2) 백엔드에서 전달한 편의성
-    // ============================
-    const convenience = data.scores.convenience;
+      // ============================
+      // 2) 편의성 (백엔드 결과 그대로 사용)
+      // ============================
+      const convenience = data.scores.convenience;
 
-    const convenienceScore = convenience.score;
-    const nearbyFacilities = [
-      {
-        name: "편의점",
-        count: convenience.facilities.convenienceStore.count,
-      },
-      {
-        name: "약국",
-        count: convenience.facilities.pharmacy.count,
-      },
-      {
-        name: "병원",
-        count: convenience.facilities.hospital.count,
-      },
-      {
-        name: "경찰서",
-        count: convenience.facilities.police.count,
-      },
-    ];
+      const convenienceScore = convenience.score;
+      const nearbyFacilities = [
+        {
+          name: '편의점',
+          count: convenience.facilities.convenienceStore.count,
+        },
+        {
+          name: '약국',
+          count: convenience.facilities.pharmacy.count,
+        },
+        {
+          name: '병원',
+          count: convenience.facilities.hospital.count,
+        },
+        {
+          name: '경찰서',
+          count: convenience.facilities.police.count,
+        },
+      ];
 
-    // ============================
-    // 3) 대중교통 (지하철역)
-    // ============================
-    const transit = data.scores.transit;
+      // ============================
+      // 3) 대중교통 (지하철역)
+      // ============================
+      const transit = data.scores.transit;
 
-    let nearestStation = transit.station
-      ? {
-          name: transit.station.name,
-          distance: transit.station.distanceText,
-          walkTime: transit.station.walkTimeText,
-          lat: transit.station.lat,
-          lng: transit.station.lng,
+      let nearestStation = transit.station
+        ? {
+            name: transit.station.name,
+            distance: transit.station.distanceText,
+            walkTime: transit.station.walkTimeText,
+            lat: transit.station.lat,
+            lng: transit.station.lng,
+          }
+        : null;
+
+      // ============================
+      // 4) 안전 점수 (시카고일 경우만)
+      // ============================
+      let safetyScore = 75;
+      let safetyGrade = 'B';
+      const city = detectCityByLatLng(lat, lng);
+
+      if (city === 'Chicago') {
+        try {
+          const safetyRes = await fetch(
+            `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
+          );
+          if (safetyRes.ok) {
+            const safetyData = await safetyRes.json();
+            safetyScore = safetyData.score;
+            safetyGrade = safetyData.grade;
+          }
+        } catch (e) {
+          console.log('Chicago safety fetch error:', e);
         }
-      : null;
-
-    // ============================
-    // 4) 안전 점수 (시카고일 경우만)
-    // ============================
-    function detectCityByLatLng(lat, lng) {
-      if (lat > 41 && lat < 42.5 && lng < -87 && lng > -88.5) return "Chicago";
-      return "Other";
-    }
-
-    let safetyScore = 75;
-    let safetyGrade = "B";
-    const city = detectCityByLatLng(lat, lng);
-
-    if (city === "Chicago") {
-      try {
-        const safetyRes = await fetch(
-          `http://localhost:4000/api/safety/chicago/point?lat=${lat}&lng=${lng}`
-        );
-        if (safetyRes.ok) {
-          const safetyData = await safetyRes.json();
-          safetyScore = safetyData.score;
-          safetyGrade = safetyData.grade;
-        }
-      } catch (e) {
-        console.log("Chicago safety fetch error:", e);
       }
+
+      // ============================
+      // 5) 최종 UI 데이터 묶기
+      // ============================
+      const finalObj = {
+        location,
+        lat,
+        lng,
+
+        // Safety
+        safetyScore,
+        safetyGrade,
+
+        // Convenience
+        convenienceScore,
+        nearbyFacilities,
+
+        // Transit
+        nearestStation,
+
+        // MVP: 접근성은 일단 제외 (원하면 추가)
+        accessibilityScore: null,
+        accessibilityTime: null,
+      };
+
+      setCurrentSearchResult(finalObj);
+      setActiveLocationIndex(-1);
+      setViewMode('single');
+    } catch (err) {
+      console.error(err);
+      alert('위치 분석 중 오류가 발생했습니다.');
+    } finally {
+      setIsLoading(false);
     }
+  };
 
-    // ============================
-    // 5) 최종 UI 데이터 묶기
-    // ============================
-    const finalObj = {
-      location,
-      lat,
-      lng,
-
-      // Safety
-      safetyScore,
-      safetyGrade,
-
-      // Convenience
-      convenienceScore,
-      nearbyFacilities,
-
-      // Transit
-      nearestStation,
-
-      // MVP: 접근성은 일단 제외 (원하면 추가)
-      accessibilityScore: null,
-      accessibilityTime: null,
-    };
-
-    setCurrentSearchResult(finalObj);
-    setActiveLocationIndex(-1);
-    setViewMode("single");
-  } catch (err) {
-    console.error(err);
-    alert("위치 분석 중 오류가 발생했습니다.");
-  } finally {
-    setIsLoading(false);
-  }
-};
-
-  
+  // 그래프 막대 눌렀을 때 호출
+  const handleFacilitySelect = (type) => {
+    setSelectedFacilityType(type);
+  };
 
   const handleGoHome = () => {
     setSavedLocations([]);
     setCurrentSearchResult(null);
     setActiveLocationIndex(-1);
     setViewMode('single');
+    setSelectedFacilityType(null);
   };
 
   const handleAddToSidebar = () => {
@@ -177,11 +178,13 @@ const handleSearch = async (location) => {
     if (newLocations.length === 0) {
       setViewMode('single');
     }
+    setSelectedFacilityType(null);
   };
 
   const handleTabClick = (index) => {
     setActiveLocationIndex(index);
     setViewMode('single');
+    setSelectedFacilityType(null);
   };
 
   const displayLocation =
@@ -281,6 +284,7 @@ const handleSearch = async (location) => {
                       safetyScore={displayLocation.safetyScore}
                       lat={displayLocation.lat}
                       lng={displayLocation.lng}
+                      selectedFacilityType={selectedFacilityType}
                     />
                   </div>
 
@@ -299,6 +303,7 @@ const handleSearch = async (location) => {
                     <ConvenienceScore
                       score={displayLocation.convenienceScore}
                       facilities={displayLocation.nearbyFacilities}
+                      onFacilitySelect={handleFacilitySelect}
                     />
                     <TransportInfo station={displayLocation.nearestStation} />
                   </div>

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Card } from "./ui/card";
 
-export function SafetyHeatMap({ location, safetyScore, lat, lng }) {
+export function SafetyHeatMap({ location, safetyScore, lat, lng , selectedFacilityType }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
 
@@ -10,6 +10,7 @@ export function SafetyHeatMap({ location, safetyScore, lat, lng }) {
   const [chicagoGeoJson, setChicagoGeoJson] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
+  const [facilityMarkers, setFacilityMarkers] = useState([]);
 
   /* -----------------------------------------
      1. 도시 자동 감지
@@ -215,3 +216,6 @@ export function SafetyHeatMap({ location, safetyScore, lat, lng }) {
     </Card>
   );
 }
+
+
+
