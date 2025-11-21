@@ -13,6 +13,10 @@ export function SafetyHeatMap({
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
 
+    // ⭐ 새로 추가
+    const markerRef = useRef(null);
+    const circleRef = useRef(null);
+
   const [areaGeoJson, setAreaGeoJson] = useState(null); // ✅ 공통 이름
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
@@ -50,23 +54,41 @@ export function SafetyHeatMap({
   }, [city]);
 
   /* -----------------------------------------
-     2. 구글맵 초기화
+     2. 구글맵 초기화 + 마커 위치 업데이트
   ------------------------------------------ */
   useEffect(() => {
     if (!window.google || !mapRef.current || lat == null || lng == null) return;
 
+    const google = window.google;
+
+    // 이미 맵이 있으면 → 위치/줌 + 마커만 업데이트
     if (mapInstanceRef.current) {
-      mapInstanceRef.current.setCenter({ lat, lng });
+      const map = mapInstanceRef.current;
+
+      map.setCenter({ lat, lng });
+      map.setZoom(city && city !== "Other" ? 11 : 14);
+
+      // ⭐ 마커 위치 업데이트
+      if (markerRef.current) {
+        markerRef.current.setPosition({ lat, lng });
+      } else {
+        markerRef.current = new google.maps.Marker({
+          map,
+          position: { lat, lng },
+        });
+      }
+
       return;
     }
 
-    const map = new window.google.maps.Map(mapRef.current, {
+    // 처음 한 번만 맵 생성
+    const map = new google.maps.Map(mapRef.current, {
       center: { lat, lng },
       zoom: city && city !== "Other" ? 11 : 14,
     });
 
-    // 현재 숙소 위치 마커
-    new window.google.maps.Marker({
+    // 최초 마커 생성
+    markerRef.current = new google.maps.Marker({
       map,
       position: { lat, lng },
     });
@@ -75,17 +97,23 @@ export function SafetyHeatMap({
   }, [lat, lng, city]);
 
   /* -----------------------------------------
-     3. 폴리곤 색칠 (choropleth)
+     3. 폴리곤 색칠 / 원 그리기
   ------------------------------------------ */
   useEffect(() => {
     const google = window.google;
     const map = mapInstanceRef.current;
-    if (!google || !map) return;
+    if (!google || !map || lat == null || lng == null) return;
 
     // 기존 DataLayer 비우기
     map.data.forEach((feature) => {
       map.data.remove(feature);
     });
+
+    // ⭐ 기존 Circle 있으면 제거
+    if (circleRef.current) {
+      circleRef.current.setMap(null);
+      circleRef.current = null;
+    }
 
     if (city && city !== "Other" && areaGeoJson) {
       // GeoJSON 올리기
@@ -109,11 +137,11 @@ export function SafetyHeatMap({
         };
       });
 
-      // 클릭 시 정보창
+      // (infoWindow 리스너는 그대로 둬도 되고,
+      //  필요하면 나중에 한 번만 등록되게 ref로 관리 가능)
       const infoWindow = new google.maps.InfoWindow();
       map.data.addListener("click", (e) => {
         const props = e.feature.getProperty.bind(e.feature);
-        // 도시마다 필드명이 다를 수 있으니 area_name 우선, 없으면 community 사용
         const name = props("area_name") || props("community");
         const score = props("safety_score");
         const crimes = props("crime_count");
@@ -134,7 +162,7 @@ export function SafetyHeatMap({
     } else {
       // 지원 안 되는 도시: 1km 반경 원 표시
       const center = { lat, lng };
-      new google.maps.Circle({
+      circleRef.current = new google.maps.Circle({
         map,
         center,
         radius: 1000,
